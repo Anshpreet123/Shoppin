@@ -1,9 +1,8 @@
-import { useState, useEffect, FormEvent } from "react";
+import { useState, useEffect, FormEvent, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { IoArrowBack, IoSearch, IoMic } from "react-icons/io5";
 import { FaCamera, FaHistory } from "react-icons/fa";
-import { useSpeechRecognition } from "../hooks/useSpeechRecognition";
 import { useSearchHistory } from "../contexts/SearchHistoryContext";
 import { fadeIn, slideInBottom } from "../utils/animations";
 
@@ -11,7 +10,113 @@ import { fadeIn, slideInBottom } from "../utils/animations";
 const GOOGLE_API_KEY = "AIzaSyAeciSpGhvqrxPyRsfWjOplaI_agYuW6bA";
 const SEARCH_ENGINE_ID: string = "91cdf4094c3794cc4";
 
-// ---------------
+// Define SpeechRecognition types for browser compatibility
+interface SpeechRecognitionConstructor {
+  new (): SpeechRecognition;
+}
+
+declare global {
+  interface Window {
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+    SpeechRecognition?: SpeechRecognitionConstructor;
+  }
+}
+
+// Custom hook for speech recognition
+const useSpeechRecognition = () => {
+  const [isListening, setIsListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+
+  // Initialize speech recognition
+  useEffect(() => {
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      console.warn("Speech Recognition not supported in this browser.");
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
+      let currentTranscript = '';
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const result = event.results[i];
+        currentTranscript += result[0].transcript;
+      }
+      setTranscript(currentTranscript);
+    };
+
+    recognition.onerror = (event: SpeechRecognitionError) => {
+      console.error('Speech recognition error:', event.error);
+      setIsListening(false);
+      if (event.error === 'not-allowed') {
+        alert('Microphone permission was denied. Please enable it in your browser settings.');
+      }
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+
+    return () =>  {
+      if (recognitionRef.current) {
+        recognitionRef.current.onresult = null as unknown as (event: SpeechRecognitionEvent) => void;
+    recognitionRef.current.onend = null as unknown as () => void;
+    recognitionRef.current.onerror = null as unknown as (event: SpeechRecognitionError) => void;
+        if (isListening) {
+          recognitionRef.current.stop();
+        }
+      }
+    };
+  }, []);
+
+  const startListening = async () => {
+    if (!recognitionRef.current || isListening) return;
+
+    try {
+      // Check for microphone permission if supported
+      if (navigator.permissions && navigator.permissions.query) {
+        const permission = await navigator.permissions.query({
+          name: 'microphone' as PermissionName,
+        });
+
+        if (permission.state === 'denied') {
+          alert('Microphone access is denied. Please allow it in your browser settings.');
+          return;
+        }
+      }
+
+      // Clear previous transcript when starting new session
+      setTranscript("");
+      recognitionRef.current.start();
+      setIsListening(true);
+    } catch (err) {
+      console.error('Failed to start speech recognition:', err);
+    }
+  };
+
+  const stopListening = () => {
+    if (recognitionRef.current && isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    }
+  };
+
+  return {
+    isListening,
+    transcript,
+    startListening,
+    stopListening,
+  };
+};
 
 // Define list animation variants
 const listVariants = {
@@ -40,20 +145,8 @@ const SearchResultsPage = () => {
   const { searchHistory, addSearchItem, isIncognito, setIsIncognito } =
     useSearchHistory();
 
-  const { isListening, transcript, startListening, stopListening } =
-    useSpeechRecognition({
-      onResult: (text) => {
-        setSearchQuery(text);
-      },
-      onEnd: () => {
-        // Automatically search when voice input ends *if* there's a transcript
-        if (transcript && searchQuery === transcript) {
-          // Check if query matches transcript to avoid duplicate searches
-          const syntheticEvent = { preventDefault: () => {} } as FormEvent;
-          handleSearch(syntheticEvent);
-        }
-      },
-    });
+  // Using our enhanced speech recognition hook
+  const { isListening, transcript, startListening, stopListening } = useSpeechRecognition();
 
   // Effect to update query from transcript *while* listening
   useEffect(() => {
@@ -61,6 +154,14 @@ const SearchResultsPage = () => {
       setSearchQuery(transcript);
     }
   }, [transcript, isListening]);
+
+  // Effect to perform search when voice input ends
+  useEffect(() => {
+    if (!isListening && transcript && searchQuery === transcript) {
+      const syntheticEvent = { preventDefault: () => {} } as FormEvent;
+      handleSearch(syntheticEvent);
+    }
+  }, [isListening, transcript]);
 
   const performSearch = async (query: string) => {
     const trimmedQuery = query.trim();
@@ -120,10 +221,7 @@ const SearchResultsPage = () => {
 
   const handleSearch = (e: FormEvent) => {
     e.preventDefault();
-    // Prevent search if listening just stopped and triggered onEnd search
-    if (!isListening) {
-      performSearch(searchQuery);
-    }
+    performSearch(searchQuery);
   };
 
   // Function to handle clicking on a search history item
@@ -132,7 +230,6 @@ const SearchResultsPage = () => {
     performSearch(query);
   };
 
-  // --- (Keep handleKeyPress, goBack, handleCameraClick, handleMicrophoneClick, toggleIncognito as they are) ---
   const handleKeyPress = (key: string) => {
     if (key === "⇧") {
       setIsShiftPressed(!isShiftPressed);
@@ -180,9 +277,8 @@ const SearchResultsPage = () => {
   const handleMicrophoneClick = () => {
     if (isListening) {
       stopListening();
-      // `onEnd` will handle the search if needed
+      // Search will be triggered by useEffect when listening stops
     } else {
-      setSearchQuery(""); // Clear query before starting listening
       startListening();
     }
   };

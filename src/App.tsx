@@ -5,7 +5,7 @@ import LensPage from './pages/LensPage';
 import SearchResultsPage from './pages/SearchResultsPage';
 import LensResultsPage from './pages/LensResultsPage';
 import { SearchHistoryProvider } from './contexts/SearchHistoryContext';
-import SpeechRecognitionComponent from './SpeechRecognitionComponent';
+// import SpeechRecognitionComponent from './SpeechRecognitionComponent';
 
 const router = createBrowserRouter([
   {
@@ -24,10 +24,10 @@ const router = createBrowserRouter([
     path: '/lens-results',
     element: <LensResultsPage />,
   },
-  {
-    path : '/speech',
-    element : <SpeechRecognitionComponent/>
-  }
+  // {
+  //   path : '/speech',
+  //   element : <SpeechRecognitionComponent/>
+  // }
 ]);
 
 export default function App() {
